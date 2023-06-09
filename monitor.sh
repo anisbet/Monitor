@@ -25,7 +25,7 @@ set -o pipefail
 
 . ~/.bashrc
 ##### Non-user-related variables ########
-VERSION="1.0.4"
+VERSION="1.0.7"
 applications=()
 is_test=false
 MONITOR_DIR="/software/EDPL/Unicorn/EPLwork/cronjobscripts/Monitor"
@@ -59,8 +59,8 @@ Monitors a given process and sends an email if it is not running.
 An email will be sent once a day while the target application is not found to be running.
 
 Flags:
--a, -app, --app [bar.sh]: Specifies the application to monitor.
--e, -email, --email [user@example.com customer@example.com]: Specifies the email addressees.
+-a, -app, --app="bar.sh fizz.sh": Specifies the application(s) to monitor.
+-e, -email, --email="user@example.com customer@example.com": Specifies the email addressees.
 -h, -help, --help: This help message.
 -t, -test, --test: Display debug information to STDOUT.
 -v, -version, --version: Print watcher.sh version and exits.
@@ -88,8 +88,8 @@ do
     -a|--app)
         shift
         # Read all the space-separated names of the --app argument string as separate app names.
+        app_ref="$1"
         read -ra applications <<< "$1"
-        logit "$MONITOR_APP version $VERSION Checking: $1"
         ;;
     -e|--email)
         shift
@@ -115,13 +115,16 @@ do
 done
 # Required applications and email addresses check.
 : "${applications:?Missing -a,--app}" "${email_addresses:?Missing -e,--email}"
+[ "$is_test" == true ] && logit "$MONITOR_APP version $VERSION Checking: $app_ref"
 # Logs and send email if this is the first time today the script notices the application not running.
 # param:  Application targetted for monitoring.
 message_staff()
 {
     local app=''
     app=$(basename "$1")
-    local warning_message="Monitor reports: $app NOT running!"
+    local readable_date
+    readable_date=$(date)
+    local warning_message="**Attention, on $readable_date monitored application $app is NOT running!\nPlease investigate.\n"
     local today=''
     today=$(date +'%Y%m%d')
     local notified="$MONITOR_DIR/${app}.notified.log"
@@ -132,11 +135,11 @@ message_staff()
     last_notified=$(tail -n 1 "$notified")
     if [ "$last_notified" == "" ] || [ "$last_notified" -ne "$today" ]; then
         # Email addressees
-        logit "Message: '$warning_message' emailed to: $email_addresses with date $today"
+        logit "$email_addresses emailed about $app failure on $readable_date"
         if [ -z "$mailer" ] || [ ! -f "$mailer" ]; then
             logit "*error, no mail service $mailer!"
         else
-            echo "$warning_message" | $mailer -s"!** Process $app not running noticed $today **!" "$email_addresses"
+            echo -e "$warning_message" | $mailer -s"** Process $app failed on $readable_date **" "$email_addresses"
         fi
         # Save the date so we don't spam until and only if the application is still not running tomorrow.
         echo "$today" >>"$notified"
@@ -145,6 +148,7 @@ message_staff()
 
 # Grep out the name of the script as well because the --app param is found by grep.
 for application in "${applications[@]}"; do
+    # Use ps and not pgrep because more control to match partial script names.
     result=$(ps aux | grep -i "$application" | grep -v "grep" | grep -v "$0")
     if [ -z "$result" ]; then
         message_staff "$application"
