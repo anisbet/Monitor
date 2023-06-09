@@ -24,7 +24,31 @@
 set -o pipefail
 
 . ~/.bashrc
-
+##### Non-user-related variables ########
+VERSION="1.0.4"
+applications=()
+is_test=false
+MONITOR_DIR="/software/EDPL/Unicorn/EPLwork/cronjobscripts/Monitor"
+MAIL_SERVICE="mailx"
+MONITOR_APP=$(basename "$0")
+## Set up logging.
+LOG_FILE="$MONITOR_DIR/monitor.log"
+# Logs messages to STDERR and $LOG file.
+# param:  Log file name. The file is expected to be a fully qualified path or the output
+#         will be directed to a file in the directory the script's running directory.
+# param:  Message to put in the file.
+# param:  (Optional) name of a operation that called this function.
+logit()
+{
+    local message="$1"
+    local time=''
+    time=$(date +"%Y-%m-%d %H:%M:%S")
+    if [ -t 0 ]; then
+        # If run from an interactive shell message STDERR.
+        echo -e "[$time] $message" >&2
+    fi
+    echo -e "[$time] $message" >>$LOG_FILE
+}
 # Prints out usage message.
 usage()
 {
@@ -35,22 +59,16 @@ Monitors a given process and sends an email if it is not running.
 An email will be sent once a day while the target application is not found to be running.
 
 Flags:
--a, -app, --app [/foo/bar.sh]: Specifies the application to monitor.
+-a, -app, --app [bar.sh]: Specifies the application to monitor.
 -e, -email, --email [user@example.com customer@example.com]: Specifies the email addressees.
 -h, -help, --help: This help message.
 -t, -test, --test: Display debug information to STDOUT.
 -v, -version, --version: Print watcher.sh version and exits.
  Example:
-    ${0} --app=/home/user/bin/cleanup.sh
+    ${0} --app="cleanup.sh watcher.sh loadusers.lp.sh"
 EOFU!
 }
 
-##### Non-user-related variables ########
-VERSION="0.0.1"
-applications=()
-is_test=false
-MONITOR_DIR=/home/anisbet/Dev/EPL/Monitor
-MAIL_SERVICE=mailx
 ### Check input parameters.
 # $@ is all command line parameters passed to the script.
 # -o is for short options like -v
@@ -69,7 +87,9 @@ do
     case $1 in
     -a|--app)
         shift
-        applications=("$1")
+        # Read all the space-separated names of the --app argument string as separate app names.
+        read -ra applications <<< "$1"
+        logit "$MONITOR_APP version $VERSION Checking: $1"
         ;;
     -e|--email)
         shift
@@ -94,52 +114,38 @@ do
     shift
 done
 # Required applications and email addresses check.
-: ${applications:?Missing -a,--app} ${email_addresses:?Missing -e,--email}
-## Set up logging.
-LOG_FILE="$MONITOR_DIR/monitor.log"
-# Logs messages to STDERR and $LOG file.
-# param:  Log file name. The file is expected to be a fully qualified path or the output
-#         will be directed to a file in the directory the script's running directory.
-# param:  Message to put in the file.
-# param:  (Optional) name of a operation that called this function.
-logit()
-{
-    local message="$1"
-    local time=$(date +"%Y-%m-%d %H:%M:%S")
-    if [ -t 0 ]; then
-        # If run from an interactive shell message STDERR.
-        echo -e "[$time] $message" >&2
-    fi
-    echo -e "[$time] $message" >>$LOG_FILE
-}
-
+: "${applications:?Missing -a,--app}" "${email_addresses:?Missing -e,--email}"
 # Logs and send email if this is the first time today the script notices the application not running.
 # param:  Application targetted for monitoring.
 message_staff()
 {
-    local app=$(basename $1)
+    local app=''
+    app=$(basename "$1")
     local warning_message="Monitor reports: $app NOT running!"
-    local today=$(date +'%Y%m%d')
+    local today=''
+    today=$(date +'%Y%m%d')
     local notified="$MONITOR_DIR/${app}.notified.log"
-    local mailer=$(which "$MAIL_SERVICE")
-    touch $notified
-    local last_notified=$(tail -n 1 "$notified")
+    local mailer=''
+    mailer=$(which "$MAIL_SERVICE")
+    touch "$notified"
+    local last_notified=''
+    last_notified=$(tail -n 1 "$notified")
     if [ "$last_notified" == "" ] || [ "$last_notified" -ne "$today" ]; then
         # Email addressees
         logit "Message: '$warning_message' emailed to: $email_addresses with date $today"
         if [ -z "$mailer" ] || [ ! -f "$mailer" ]; then
             logit "*error, no mail service $mailer!"
         else
-            echo "$warning_message" | $mailer -a"From:$USER@$HOST" -s"!** Process $app not running noticed $today **!" "$email_addresses"
+            echo "$warning_message" | $mailer -s"!** Process $app not running noticed $today **!" "$email_addresses"
         fi
         # Save the date so we don't spam until and only if the application is still not running tomorrow.
-        echo "$today" >>$notified
+        echo "$today" >>"$notified"
     fi
 }
 
 # Grep out the name of the script as well because the --app param is found by grep.
-for application in ${applications[@]}; do
-    result=$(ps aux | grep "$application" | grep -v "grep" | grep -v "$0")
+for application in "${applications[@]}"; do
+    result=$(ps aux | grep -i "$application" | grep -v "grep" | grep -v "$0")
     if [ -z "$result" ]; then
         message_staff "$application"
         if [ "$is_test" == true ]; then
